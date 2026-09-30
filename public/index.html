@@ -1,17 +1,1 @@
-<!doctype html>
-<html lang="fr">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b0d12"><meta name="description" content="Craftpick Raspberry Pi status dashboard"><title>Craftpick Status</title><link rel="stylesheet" href="/style.css"></head>
-<body>
-<main class="shell">
-<header class="topbar"><div><div class="eyebrow">CRAFTPICK</div><h1>Raspberry Pi Status</h1><p>Surveillance locale de votre Raspberry Pi</p></div><div id="statusBadge" class="badge loading"><span></span>Connexion…</div></header>
-<section class="hero card"><div><p class="label">MACHINE</p><h2 id="hostname">—</h2><p id="platform">—</p></div><div class="hero-meta"><div><span>Dernière mise à jour</span><strong id="updated">—</strong></div><div><span>Uptime</span><strong id="uptime">—</strong></div></div></section>
-<section class="grid">
-<article class="card metric"><div class="metric-head"><span>CPU</span><span id="cpuValue">—</span></div><div class="bar"><i id="cpuBar"></i></div><p id="cpuModel">—</p></article>
-<article class="card metric"><div class="metric-head"><span>MÉMOIRE</span><span id="memoryValue">—</span></div><div class="bar"><i id="memoryBar"></i></div><p id="memoryDetail">—</p></article>
-<article class="card metric"><div class="metric-head"><span>DISQUE /</span><span id="diskValue">—</span></div><div class="bar"><i id="diskBar"></i></div><p id="diskDetail">—</p></article>
-<article class="card metric"><div class="metric-head"><span>TEMPÉRATURE</span><span id="tempValue">—</span></div><div class="temp"><div id="tempDot"></div><span id="tempState">Lecture…</span></div><p>Température CPU du Raspberry Pi</p></article>
-</section>
-<section class="details card"><div class="section-title"><div><p class="label">DÉTAILS</p><h2>Système</h2></div><span id="refresh">Auto · 3 s</span></div><div class="rows"><div><span>Architecture</span><strong id="arch">—</strong></div><div><span>Node.js</span><strong id="node">—</strong></div><div><span>CPU</span><strong id="cores">—</strong></div><div><span>Réseau</span><strong id="network">—</strong></div></div></section>
-<footer>Craftpick Status · Raspberry Pi · <span id="year"></span></footer>
-</main><script src="/app.js"></script>
-</body></html>
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#080a0f"><title>Craftpick Status</title><link rel="stylesheet" href="/style.css"></head><body><main class="shell"><header class="topbar"><div><div class="eyebrow">CRAFTPICK</div><h1 id="siteName">Status</h1><p>État en temps réel de nos services.</p></div><div id="global" class="badge"><span></span>Chargement</div></header><section id="monitors" class="monitor-list"></section><footer><span id="updated">—</span> · <a href="/admin">Administration</a></footer></main><script src="/app.js"></script></body></html>
