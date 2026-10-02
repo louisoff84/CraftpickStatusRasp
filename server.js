@@ -1,64 +1,51 @@
-const http=require("http");
-const fs=require("fs");
-const os=require("os");
-const path=require("path");
-const crypto=require("crypto");
-const net=require("net");
-
-const HOST=process.env.HOST||"0.0.0.0";
-const PORT=Number(process.env.PORT||3000);
-const PUBLIC_DIR=path.join(__dirname,"public");
-const DATA_DIR=process.env.DATA_DIR||path.join(__dirname,"data");
-const CONFIG_FILE=path.join(DATA_DIR,"config.json");
-const HISTORY_FILE=path.join(DATA_DIR,"history.json");
-const SESSION_TTL=24*60*60*1000;
-const sessions=new Map();
-fs.mkdirSync(DATA_DIR,{recursive:true});
-
-const DEFAULT_CONFIG={siteName:"Craftpick Status",monitors:[],notifications:{discordWebhook:""}};
-function load(file,fallback){try{return JSON.parse(fs.readFileSync(file,"utf8"))}catch{return fallback}}
-let config=load(CONFIG_FILE,DEFAULT_CONFIG);
-if(!config.monitors)config.monitors=[];
-if(!config.notifications)config.notifications={discordWebhook:""};
-let history=load(HISTORY_FILE,{});
-function saveConfig(){fs.writeFileSync(CONFIG_FILE,JSON.stringify(config,null,2))}
-function saveHistory(){fs.writeFileSync(HISTORY_FILE,JSON.stringify(history))}
-function hashPassword(password){return crypto.scryptSync(password,"craftpick-status",64).toString("hex")}
-const ADMIN_HASH=process.env.ADMIN_PASSWORD_HASH||hashPassword(process.env.ADMIN_PASSWORD||"");
-if(!process.env.ADMIN_PASSWORD_HASH&&!process.env.ADMIN_PASSWORD)console.warn("Set ADMIN_PASSWORD or ADMIN_PASSWORD_HASH before exposing the panel.");
-
-function safeEqual(a,b){const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&crypto.timingSafeEqual(x,y)}
-function cookieSession(req){const m=(req.headers.cookie||"").match(/(?:^|; )session=([^;]+)/);return m?m[1]:null}
-function isAdmin(req){const token=cookieSession(req),s=token&&sessions.get(token);if(!s)return false;if(s< Date.now()){sessions.delete(token);return false}return true}
-function json(res,status,data){res.writeHead(status,{"Content-Type":"application/json; charset=utf-8","Cache-Control":"no-store","X-Content-Type-Options":"nosniff"});res.end(JSON.stringify(data))}
-function send(res,status,body,type="text/plain; charset=utf-8"){res.writeHead(status,{"Content-Type":type,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff"});res.end(body)}
-function body(req){return new Promise((resolve,reject)=>{let b="";req.on("data",c=>{b+=c;if(b.length>1e6)req.destroy()});req.on("end",()=>{try{resolve(b?JSON.parse(b):{})}catch(e){reject(e)}});req.on("error",reject)})}
-function readFileSafe(file){try{return fs.readFileSync(file,"utf8").trim()}catch{return null}}
-function systemStatus(cb){const cpus=os.cpus(),total=os.totalmem(),free=os.freemem(),raw=readFileSafe("/sys/class/thermal/thermal_zone0/temp"),temperature=raw?Number(raw)/1000:null;require("child_process").execFile("df",["-k","/"],{timeout:1500},(e,out)=>{let disk=null;if(!e){const p=out.trim().split("\n").pop().trim().split(/\s+/);disk={percent:parseInt(p[4],10)||0,totalKb:+p[1]||0,usedKb:+p[2]||0,freeKb:+p[3]||0}}cb({hostname:os.hostname(),platform:process.platform,arch:process.arch,node:process.version,uptime:os.uptime(),cpuCount:cpus.length,cpuModel:cpus[0]?.model||"Unknown",memory:{total,free,used:total-free,percent:total?Math.round((total-free)/total*1000)/10:0},temperature:Number.isFinite(temperature)?Math.round(temperature*10)/10:null,disk,network:Object.entries(os.networkInterfaces()).flatMap(([name,es])=>(es||[]).filter(e=>!e.internal&&e.family==="IPv4").map(e=>({name,address:e.address})))})})}
-
-function publicMonitors(){return config.monitors.map(m=>({id:m.id,name:m.name,url:m.url,type:m.type,interval:m.interval,history:(history[m.id]||[]).slice(-90)}))}
-function checkMonitor(m){return new Promise(resolve=>{const start=Date.now();if(m.type==="tcp"){const u=new URL(m.url);const s=net.createConnection({host:u.hostname,port:Number(u.port||80),timeout:5000},()=>{s.destroy();resolve({up:true,latency:Date.now()-start})});s.on("error",()=>{s.destroy();resolve({up:false,latency:null})});s.on("timeout",()=>{s.destroy();resolve({up:false,latency:null})});return}
-let u;try{u=new URL(m.url)}catch{return resolve({up:false,latency:null})}
-const mod=u.protocol==="https:"?require("https"):require("http");
-const r=mod.request(u,{method:"GET",timeout:5000,headers:{"User-Agent":"CraftpickStatus/1.0"}},res=>{res.resume();resolve({up:res.statusCode>=200&&res.statusCode<400,latency:Date.now()-start,status:res.statusCode})});
-r.on("error",()=>resolve({up:false,latency:null}));r.on("timeout",()=>{r.destroy();resolve({up:false,latency:null})});r.end()})}
-async function runChecks(){for(const m of config.monitors){const result=await checkMonitor(m);const item={time:Date.now(),up:result.up,latency:result.latency,status:result.status||null};history[m.id]=[...(history[m.id]||[]),item].slice(-5000);if(!result.up)await notifyDown(m)}saveHistory()}
-const notified=new Map();
-async function notifyDown(m){if(!config.notifications.discordWebhook||notified.get(m.id))return;notified.set(m.id,Date.now());try{const u=new URL(config.notifications.discordWebhook);const data=JSON.stringify({content:"🔴 **"+m.name+"** est actuellement indisponible sur Craftpick Status."});const mod=u.protocol==="https:"?require("https"):require("http");const r=mod.request(u,{method:"POST",headers:{"Content-Type":"application/json","Content-Length":Buffer.byteLength(data)}},x=>x.resume());r.on("error",()=>{});r.write(data);r.end()}catch{}}
-function publicSummary(){return config.monitors.map(m=>{const h=history[m.id]||[],last=h[h.length-1],recent=h.slice(-100),up=recent.filter(x=>x.up).length;return {...m,history:recent,online:!!last?.up,latency:last?.latency||null,uptime:recent.length?Math.round(up/recent.length*10000)/100:100,lastCheck:last?.time||null}})}
-const MIME={".html":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"application/javascript; charset=utf-8",".json":"application/json; charset=utf-8",".svg":"image/svg+xml"};
-const server=http.createServer(async(req,res)=>{
-const url=new URL(req.url,"http://localhost");
-if(req.method==="POST"&&url.pathname==="/api/login"){try{const b=await body(req);if(!safeEqual(hashPassword(String(b.password||"")),ADMIN_HASH))return json(res,401,{error:"Identifiants invalides"});const token=crypto.randomBytes(32).toString("hex");sessions.set(token,Date.now()+SESSION_TTL);res.setHeader("Set-Cookie",`session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`);return json(res,200,{ok:true})}catch{return json(res,400,{error:"Requête invalide"})}}
-if(req.method==="POST"&&url.pathname==="/api/logout"){const t=cookieSession(req);if(t)sessions.delete(t);res.setHeader("Set-Cookie","session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");return json(res,200,{ok:true})}
-if(url.pathname==="/api/public")return json(res,200,{siteName:config.siteName,monitors:publicSummary(),timestamp:Date.now()});
-if(url.pathname==="/api/system"){if(!isAdmin(req))return json(res,401,{error:"Unauthorized"});return systemStatus(s=>json(res,200,s))}
-if(url.pathname==="/api/admin"){if(!isAdmin(req))return json(res,401,{error:"Unauthorized"});return json(res,200,{siteName:config.siteName,monitors:config.monitors,notifications:{discordWebhook:config.notifications.discordWebhook?"configured":""}})}
-if(req.method==="POST"&&url.pathname==="/api/admin/monitor"){if(!isAdmin(req))return json(res,401,{error:"Unauthorized"});try{const b=await body(req);if(!b.name||!b.url)return json(res,400,{error:"Nom et URL requis"});const m={id:b.id||crypto.randomUUID(),name:String(b.name).slice(0,80),url:String(b.url).slice(0,500),type:b.type==="tcp"?"tcp":"http",interval:Math.max(10,Math.min(3600,Number(b.interval)||30))};const i=config.monitors.findIndex(x=>x.id===m.id);if(i>=0)config.monitors[i]=m;else config.monitors.push(m);saveConfig();return json(res,200,m)}catch{return json(res,400,{error:"Requête invalide"})}}
-if(req.method==="DELETE"&&url.pathname.startsWith("/api/admin/monitor/")){if(!isAdmin(req))return json(res,401,{error:"Unauthorized"});const id=url.pathname.split("/").pop();config.monitors=config.monitors.filter(m=>m.id!==id);delete history[id];saveConfig();saveHistory();return json(res,200,{ok:true})}
-if(req.method==="POST"&&url.pathname==="/api/admin/settings"){if(!isAdmin(req))return json(res,401,{error:"Unauthorized"});const b=await body(req);if(b.siteName)config.siteName=String(b.siteName).slice(0,80);if(b.discordWebhook!==undefined)config.notifications.discordWebhook=String(b.discordWebhook);saveConfig();return json(res,200,{ok:true})}
-if(req.method==="POST"&&url.pathname==="/api/admin/check"){if(!isAdmin(req))return json(res,401,{error:"Unauthorized"});await runChecks();return json(res,200,{ok:true})}
-if(req.method==="GET"&&url.pathname==="/api/health")return json(res,200,{ok:true});
-let requestPath=decodeURIComponent(url.pathname);if(requestPath==="/")requestPath="/index.html";if(requestPath==="/admin")requestPath="/admin.html";const filePath=path.normalize(path.join(PUBLIC_DIR,requestPath));if(!filePath.startsWith(PUBLIC_DIR+path.sep))return send(res,403,"Forbidden");fs.readFile(filePath,(e,data)=>{if(e)return send(res,e.code==="ENOENT"?404:500,e.code==="ENOENT"?"Not found":"Internal server error");const ext=path.extname(filePath);res.writeHead(200,{"Content-Type":MIME[ext]||"application/octet-stream","Cache-Control":ext===".html"?"no-cache":"public, max-age=3600","X-Content-Type-Options":"nosniff"});res.end(data)});
-});
-server.listen(PORT,HOST,()=>{console.log(`Craftpick Status listening on http://${HOST}:${PORT}`);runChecks();setInterval(runChecks,30000)});
+const http=require("http"),https=require("https"),fs=require("fs"),os=require("os"),path=require("path"),crypto=require("crypto"),net=require("net"),{execFile}=require("child_process");
+const HOST=process.env.HOST||"0.0.0.0",PORT=Number(process.env.PORT||3000),PUBLIC=path.join(__dirname,"public"),DATA=process.env.DATA_DIR||path.join(__dirname,"data");
+fs.mkdirSync(DATA,{recursive:true});
+const cfgFile=path.join(DATA,"config.json"),histFile=path.join(DATA,"history.json");
+const defaults={siteName:"Craftpick Status",logo:"",monitors:[],statusPages:[{id:"main",slug:"craftpick",title:"Craftpick Status",description:"État en temps réel de nos services.",monitors:[]}],maintenance:[],incidents:[],notifications:{discordWebhook:""}};
+function load(f,d){try{return JSON.parse(fs.readFileSync(f,"utf8"))}catch{return d}} function save(f,d){fs.writeFileSync(f,JSON.stringify(d,null,2))}
+let cfg=load(cfgFile,defaults),history=load(histFile,{});
+cfg.monitors??=[];cfg.statusPages??=defaults.statusPages;cfg.maintenance??=[];cfg.incidents??=[];cfg.notifications??={discordWebhook:""};
+const sessions=new Map(),loginFails=new Map(),notified=new Map(),timers=new Map();
+const ADMIN_HASH=process.env.ADMIN_PASSWORD_HASH||crypto.scryptSync(process.env.ADMIN_PASSWORD||"","craftpick-status",64).toString("hex");
+function equal(a,b){const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&crypto.timingSafeEqual(x,y)}
+function cookie(req){const m=(req.headers.cookie||"").match(/(?:^|; )session=([^;]+)/);return m&&m[1]}
+function admin(req){const t=cookie(req),e=t&&sessions.get(t);if(!e)return false;if(e<Date.now()){sessions.delete(t);return false}return true}
+function send(res,status,data,type="application/json; charset=utf-8",extra={}){res.writeHead(status,{"Content-Type":type,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff",...extra});res.end(typeof data==="string"?data:JSON.stringify(data))}
+function readBody(req){return new Promise((ok,no)=>{let b="";req.on("data",c=>{b+=c;if(b.length>2e6)req.destroy()});req.on("end",()=>{try{ok(b?JSON.parse(b):{})}catch(e){no(e)}});req.on("error",no)})}
+function id(){return crypto.randomUUID()}
+function safeUrl(v){try{return new URL(v)}catch{return null}}
+function activeMaintenance(m){return cfg.maintenance.some(x=>x.enabled&&x.start<=Date.now()&&Date.now()<=x.end&&(x.monitors||[]).includes(m.id))}
+function monitorPublic(m){const h=(history[m.id]||[]).slice(-90),last=h.at(-1),recent=h.slice(-100);return{id:m.id,name:m.name,type:m.type,tags:m.tags||[],online:last?last.up:null,maintenance:activeMaintenance(m),latency:last?.latency??null,lastCheck:last?.time??null,uptime:recent.length?Math.round(recent.filter(x=>x.up).length/recent.length*10000)/100:100,history:h.map(x=>({time:x.time,up:x.up,latency:x.latency}))}}
+function check(m){return new Promise(resolve=>{const start=Date.now(),timeout=Number(m.timeout||5000);if(m.type==="ping"){const host=m.url.replace(/^ping:\/\//,"").split("/")[0];return execFile("ping",["-c","1","-W","3",host],{timeout},e=>resolve({up:!e,latency:e?null:Date.now()-start}))}if(m.type==="tcp"){const u=safeUrl(m.url);if(!u)return resolve({up:false,latency:null,error:"URL"});const s=net.createConnection({host:u.hostname,port:Number(u.port||80),timeout},()=>{s.destroy();resolve({up:true,latency:Date.now()-start})});s.on("error",()=>{s.destroy();resolve({up:false,latency:null})});s.on("timeout",()=>{s.destroy();resolve({up:false,latency:null})});return}
+const u=safeUrl(m.url);if(!u)return resolve({up:false,latency:null,error:"URL"});const mod=u.protocol==="https:"?https:http;const r=mod.request(u,{method:m.method||"GET",timeout,headers:{"User-Agent":"CraftpickStatus/2.0","Accept":"*/*"}},res=>{let data="";res.setEncoding("utf8");res.on("data",c=>{if(data.length<200000)data+=c});res.on("end",()=>{let up=res.statusCode>=200&&res.statusCode<400;if(m.type==="keyword"&&m.keyword)up=up&&data.includes(m.keyword);resolve({up,latency:Date.now()-start,status:res.statusCode})})});r.on("error",()=>resolve({up:false,latency:null}));r.on("timeout",()=>{r.destroy();resolve({up:false,latency:null})});r.end()})}
+async function notify(text){const hook=cfg.notifications.discordWebhook;if(!hook)return;try{const u=new URL(hook),data=JSON.stringify({content:text}),mod=u.protocol==="https:"?https:http,r=mod.request(u,{method:"POST",headers:{"Content-Type":"application/json","Content-Length":Buffer.byteLength(data)}},x=>x.resume());r.on("error",()=>{});r.end(data)}catch{}}
+async function run(m){if(activeMaintenance(m))return;const old=(history[m.id]||[]).at(-1),r=await check(m),item={time:Date.now(),up:r.up,latency:r.latency,status:r.status||null,error:r.error||null};history[m.id]=[...(history[m.id]||[]),item].slice(-10000);save(histFile,history);if(old&&old.up!==r.up)await notify((r.up?"🟢":"🔴")+" **"+m.name+"** est "+(r.up?"de nouveau opérationnel":"indisponible")+" sur Craftpick Status.");schedule(m)}
+function schedule(m){clearTimeout(timers.get(m.id));timers.set(m.id,setTimeout(()=>run(m),Math.max(10,Number(m.interval)||60)*1000))}
+function system(){return new Promise(ok=>{const c=os.cpus(),total=os.totalmem(),free=os.freemem(),raw=(()=>{try{return Number(fs.readFileSync("/sys/class/thermal/thermal_zone0/temp"))/1000}catch{return null}})();execFile("df",["-k","/"],{timeout:1500},(e,o)=>{let disk=null;if(!e){const p=o.trim().split("\n").at(-1).trim().split(/\s+/);disk={percent:+String(p[4]||"0").replace("%",""),total:+p[1]||0,used:+p[2]||0,free:+p[3]||0}}ok({hostname:os.hostname(),arch:process.arch,node:process.version,cpu:c.length,cpuModel:c[0]?.model,ram:{total,used:total-free,percent:Math.round((total-free)/total*1000)/10},disk,temp:raw,uptime:os.uptime()})})})}
+const MIME={".html":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",".js":"application/javascript; charset=utf-8"};
+function publicPage(slug){const p=cfg.statusPages.find(x=>x.slug===slug)||cfg.statusPages[0];const ids=p?.monitors?.length?p.monitors:cfg.monitors.map(x=>x.id);return{siteName:p?.title||cfg.siteName,description:p?.description||"",monitors:cfg.monitors.filter(m=>ids.includes(m.id)).map(monitorPublic),incidents:cfg.incidents.filter(x=>!x.resolved).slice(-20),maintenance:cfg.maintenance.filter(x=>x.enabled&&x.end>Date.now()).map(x=>({id:x.id,title:x.title,start:x.start,end:x.end,monitors:x.monitors}))}}
+function adminData(){return{siteName:cfg.siteName,monitors:cfg.monitors,statusPages:cfg.statusPages,maintenance:cfg.maintenance,incidents:cfg.incidents,notifications:{discordWebhook:cfg.notifications.discordWebhook?"configured":""}}}
+const server=http.createServer(async(req,res)=>{const u=new URL(req.url,"http://localhost");
+if(req.method==="POST"&&u.pathname==="/api/login"){const ip=req.socket.remoteAddress||"unknown",f=loginFails.get(ip)||{n:0,until:0};if(f.until>Date.now())return send(res,429,{error:"Trop de tentatives"});try{const b=await readBody(req);if(!equal(crypto.scryptSync(String(b.password||""),"craftpick-status",64).toString("hex"),ADMIN_HASH)){f.n++;if(f.n>=5){f.n=0;f.until=Date.now()+60000}loginFails.set(ip,f);return send(res,401,{error:"Mot de passe incorrect"})}loginFails.delete(ip);const t=crypto.randomBytes(32).toString("hex");sessions.set(t,Date.now()+86400000);return send(res,200,{ok:true},"application/json; charset=utf-8",{"Set-Cookie":`session=${t}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`})}catch{return send(res,400,{error:"Requête invalide"})}}
+if(req.method==="POST"&&u.pathname==="/api/logout"){const t=cookie(req);if(t)sessions.delete(t);return send(res,200,{ok:true},"application/json; charset=utf-8",{"Set-Cookie":"session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})}
+if(u.pathname==="/api/health")return send(res,200,{ok:true});
+if(u.pathname==="/api/public")return send(res,200,publicPage(u.searchParams.get("page")||"craftpick"));
+if(u.pathname==="/api/system"){if(!admin(req))return send(res,401,{error:"Unauthorized"});return send(res,200,await system())}
+if(u.pathname==="/api/admin"){if(!admin(req))return send(res,401,{error:"Unauthorized"});return send(res,200,adminData())}
+if(!admin(req)&&u.pathname.startsWith("/api/admin/"))return send(res,401,{error:"Unauthorized"});
+try{
+if(req.method==="POST"&&u.pathname==="/api/admin/monitor"){const b=await readBody(req),m={id:b.id||id(),name:String(b.name||"Monitor").slice(0,100),url:String(b.url||"").slice(0,500),type:["http","keyword","tcp","ping"].includes(b.type)?b.type:"http",method:b.method==="HEAD"?"HEAD":"GET",keyword:String(b.keyword||"").slice(0,200),interval:Math.max(10,Math.min(86400,+b.interval||60)),timeout:Math.max(1000,Math.min(30000,+b.timeout||5000)),tags:Array.isArray(b.tags)?b.tags.slice(0,10).map(String):[],active:b.active!==false};if(!m.url)return send(res,400,{error:"URL requise"});const i=cfg.monitors.findIndex(x=>x.id===m.id);if(i<0)cfg.monitors.push(m);else cfg.monitors[i]=m;save(cfgFile,cfg);schedule(m);return send(res,200,m)}
+if(req.method==="DELETE"&&u.pathname.startsWith("/api/admin/monitor/")){const mid=u.pathname.split("/").pop();cfg.monitors=cfg.monitors.filter(m=>m.id!==mid);delete history[mid];clearTimeout(timers.get(mid));save(cfgFile,cfg);save(histFile,history);return send(res,200,{ok:true})}
+if(req.method==="POST"&&u.pathname==="/api/admin/check"){for(const m of cfg.monitors)await run(m);return send(res,200,{ok:true})}
+if(req.method==="POST"&&u.pathname==="/api/admin/settings"){const b=await readBody(req);if(b.siteName)cfg.siteName=String(b.siteName).slice(0,100);if(b.discordWebhook!==undefined)cfg.notifications.discordWebhook=String(b.discordWebhook);save(cfgFile,cfg);return send(res,200,{ok:true})}
+if(req.method==="POST"&&u.pathname==="/api/admin/status-page"){const b=await readBody(req),p={id:b.id||id(),slug:String(b.slug||"status").toLowerCase().replace(/[^a-z0-9-]/g,"-").slice(0,60),title:String(b.title||cfg.siteName).slice(0,100),description:String(b.description||"").slice(0,300),monitors:Array.isArray(b.monitors)?b.monitors:[]};const i=cfg.statusPages.findIndex(x=>x.id===p.id);if(i<0)cfg.statusPages.push(p);else cfg.statusPages[i]=p;save(cfgFile,cfg);return send(res,200,p)}
+if(req.method==="DELETE"&&u.pathname.startsWith("/api/admin/status-page/")){const pid=u.pathname.split("/").pop();if(cfg.statusPages.length>1)cfg.statusPages=cfg.statusPages.filter(x=>x.id!==pid);save(cfgFile,cfg);return send(res,200,{ok:true})}
+if(req.method==="POST"&&u.pathname==="/api/admin/maintenance"){const b=await readBody(req),x={id:b.id||id(),title:String(b.title||"Maintenance").slice(0,100),start:+b.start||Date.now(),end:+b.end||Date.now()+3600000,enabled:b.enabled!==false,monitors:Array.isArray(b.monitors)?b.monitors:[]};const i=cfg.maintenance.findIndex(y=>y.id===x.id);if(i<0)cfg.maintenance.push(x);else cfg.maintenance[i]=x;save(cfgFile,cfg);return send(res,200,x)}
+if(req.method==="DELETE"&&u.pathname.startsWith("/api/admin/maintenance/")){const mid=u.pathname.split("/").pop();cfg.maintenance=cfg.maintenance.filter(x=>x.id!==mid);save(cfgFile,cfg);return send(res,200,{ok:true})}
+if(req.method==="POST"&&u.pathname==="/api/admin/incident"){const b=await readBody(req),x={id:b.id||id(),title:String(b.title||"Incident").slice(0,120),message:String(b.message||"").slice(0,1000),severity:["minor","major","critical"].includes(b.severity)?b.severity:"major",resolved:false,created:Date.now(),monitors:Array.isArray(b.monitors)?b.monitors:[]};cfg.incidents.push(x);save(cfgFile,cfg);return send(res,200,x)}
+if(req.method==="POST"&&u.pathname==="/api/admin/incident/resolve"){const b=await readBody(req),x=cfg.incidents.find(i=>i.id===b.id);if(x)x.resolved=true;save(cfgFile,cfg);return send(res,200,{ok:true})}
+}catch(e){return send(res,400,{error:e.message||"Erreur"})}
+let file=u.pathname;if(file==="/")file="/index.html";if(file==="/admin")file="/admin.html";if(file.startsWith("/status/"))return send(res,200,fs.readFileSync(path.join(PUBLIC,"index.html"),"utf8"),"text/html; charset=utf-8");
+const fp=path.normalize(path.join(PUBLIC,file));if(!fp.startsWith(PUBLIC+path.sep))return send(res,403,"Forbidden","text/plain; charset=utf-8");fs.readFile(fp,(e,d)=>{if(e)return send(res,404,"Not found","text/plain; charset=utf-8");send(res,200,d,MIME[path.extname(fp)]||"application/octet-stream",{"Cache-Control":path.extname(fp)===".html"?"no-cache":"public, max-age=3600"})})});
+server.listen(PORT,HOST,()=>{console.log("Craftpick Status on "+HOST+":"+PORT);for(const m of cfg.monitors)if(m.active!==false)schedule(m)});
