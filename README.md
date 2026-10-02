@@ -1,37 +1,78 @@
 # CraftpickStatusRasp
 
-Dashboard web léger pour afficher l'état d'un Raspberry Pi.
+Monitoring et status pages inspirés d'Uptime Kuma, optimisés pour un Raspberry Pi 3 A+.
 
 ## Fonctionnalités
 
-- CPU et charge système
-- RAM utilisée
-- espace disque de /
-- température CPU
-- uptime
-- architecture et version Node.js
-- interfaces IPv4
-- actualisation automatique toutes les 3 secondes
-- interface responsive
-- aucune dépendance npm
+- Dashboard public de statut
+- Monitors **HTTP / HTTPS**
+- Monitors **HTTP + Keyword**
+- Monitors **TCP**
+- Monitors **Ping**
+- Intervalle et timeout configurables par monitor
+- Historique des checks
+- Uptime et temps de réponse
+- Tags
+- Détection des changements UP/DOWN
+- Notifications Discord via webhook
+- Incidents manuels avec niveaux mineur / majeur / critique
+- Maintenance planifiée
+- Plusieurs Status Pages publiques
+- Administration protégée par mot de passe
+- Protection basique contre le brute-force du login
+- Données persistantes dans `data/`
+- Aucune dépendance npm externe
 
 ## Installation
 
-Cloner le dépôt, entrer dans le dossier puis lancer :
+```bash
+git clone https://github.com/louisoff84/CraftpickStatusRasp.git
+cd CraftpickStatusRasp
+export ADMIN_PASSWORD='CHANGE-ME'
+npm start
+```
 
-    npm start
+Page publique : `http://IP_DU_RASPBERRY:3000`
 
-Le dashboard est disponible sur http://IP_DU_RASPBERRY:3000.
+Administration : `http://IP_DU_RASPBERRY:3000/admin`
 
-Pour changer le port :
+Les Status Pages créées depuis l'administration sont accessibles avec :
 
-    PORT=8080 npm start
+```
+/status/slug
+```
 
 ## systemd
 
-Créer /etc/systemd/system/craftpick-status.service avec un service Node.js pointant vers server.js, puis activer le service avec :
+Exemple :
 
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now craftpick-status
+```ini
+[Unit]
+Description=Craftpick Status
+After=network.target
 
-Le serveur écoute sur 0.0.0.0 par défaut.
+[Service]
+Type=simple
+WorkingDirectory=/opt/CraftpickStatusRasp
+ExecStart=/usr/bin/node /opt/CraftpickStatusRasp/server.js
+Environment=NODE_ENV=production
+Environment=ADMIN_PASSWORD=CHANGE-ME
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Puis :
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now craftpick-status
+```
+
+Pour une exposition Internet, utilise HTTPS devant Node.js (Caddy, Nginx ou Cloudflare Tunnel) et ne mets jamais le mot de passe dans Git.
+
+## Limites actuelles
+
+Ce projet reproduit les fonctions principales d'un outil de status/monitoring de type Uptime Kuma, mais ce n'est pas un fork d'Uptime Kuma et ne prétend pas reproduire 100 % de ses intégrations et protocoles.
