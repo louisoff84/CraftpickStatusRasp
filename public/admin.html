@@ -1,1 +1,78 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Craftpick Status Admin</title><link rel="stylesheet" href="/admin.css"></head><body><section id="login" class="box login"><b>CRAFTPICK STATUS</b><h1>Administration</h1><p>Uptime Kuma-style monitoring.</p><input id="password" type="password" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')login()"><button onclick="login()">Se connecter</button><small id="error"></small></section><main id="panel" hidden><header><div><b>CRAFTPICK STATUS</b><h1>Monitoring</h1></div><button onclick="logout()">Déconnexion</button></header><nav><button onclick="tab('monitors')">Monitors</button><button onclick="tab('status')">Status Pages</button><button onclick="tab('maintenance')">Maintenance</button><button onclick="tab('incidents')">Incidents</button><button onclick="tab('settings')">Paramètres</button></nav><section id="monitors" class="tab"><div class="toolbar"><h2>Monitors</h2><button onclick="edit()">+ Ajouter</button><button onclick="check()">Vérifier tout</button></div><div id="monitorList" class="list"></div><section id="editor" class="box" hidden><h2>Monitor</h2><input id="mname" placeholder="Nom"><input id="murl" placeholder="https://craftpick.fr / tcp://host:25565 / ping://host"><select id="mtype"><option value="http">HTTP / HTTPS</option><option value="keyword">HTTP + Keyword</option><option value="tcp">TCP</option><option value="ping">Ping</option></select><input id="mkeyword" placeholder="Keyword attendu (HTTP + Keyword)"><div class="cols"><input id="minterval" type="number" min="10" value="60" placeholder="Intervalle secondes"><input id="mtimeout" type="number" min="1000" value="5000" placeholder="Timeout ms"></div><input id="mtags" placeholder="Tags, séparés par des virgules"><button onclick="saveMonitor()">Enregistrer</button><button class="secondary" onclick="cancelEdit()">Annuler</button></section></section><section id="status" class="tab" hidden><div class="toolbar"><h2>Status Pages</h2><button onclick="newStatus()">+ Ajouter</button></div><div id="statusList" class="list"></div><section class="box"><h2>Éditeur</h2><input id="spTitle" placeholder="Titre"><input id="spSlug" placeholder="Slug URL"><input id="spDesc" placeholder="Description"><div id="spMonitors"></div><button onclick="saveStatus()">Enregistrer</button></section></section><section id="maintenance" class="tab" hidden><div class="toolbar"><h2>Maintenance</h2><button onclick="newMaintenance()">+ Planifier</button></div><div id="maintenanceList" class="list"></div><section class="box"><h2>Planification</h2><input id="mtitle" placeholder="Titre"><div class="cols"><input id="mstart" type="datetime-local"><input id="mend" type="datetime-local"></div><div id="maintMonitors"></div><button onclick="saveMaintenance()">Enregistrer</button></section></section><section id="incidents" class="tab" hidden><div class="toolbar"><h2>Incidents</h2><button onclick="newIncident()">+ Déclarer</button></div><div id="incidentList" class="list"></div><section class="box"><h2>Incident</h2><input id="ititle" placeholder="Titre"><select id="iseverity"><option value="minor">Mineur</option><option value="major">Majeur</option><option value="critical">Critique</option></select><textarea id="imessage" placeholder="Description"></textarea><div id="incMonitors"></div><button onclick="saveIncident()">Publier</button></section></section><section id="settings" class="tab" hidden><div class="box"><h2>Paramètres</h2><input id="site" placeholder="Nom global"><input id="webhook" placeholder="Discord Webhook (optionnel)"><button onclick="saveSettings()">Sauvegarder</button><p>Page publique : <code>/</code> · Pages : <code>/status/&lt;slug&gt;</code></p></div><div class="box"><h2>Système Raspberry Pi</h2><pre id="system">—</pre></div></section></main><script src="/admin.js"></script></body></html>
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#090b12">
+<title>Craftpick Status — Administration</title>
+<link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">C</span><div><strong>CRAFTPICK</strong><small>STATUS</small></div></div>
+    <div class="side-label">MONITORING</div>
+    <nav id="nav">
+      <button class="nav-item active" data-tab="monitors"><span>◉</span> Monitors</button>
+      <button class="nav-item" data-tab="status"><span>▣</span> Status Pages</button>
+      <button class="nav-item" data-tab="maintenance"><span>◷</span> Maintenance</button>
+      <button class="nav-item" data-tab="incidents"><span>!</span> Incidents</button>
+      <button class="nav-item" data-tab="settings"><span>⚙</span> Paramètres</button>
+    </nav>
+    <div class="sidebar-bottom"><a href="/" target="_blank">Voir le status ↗</a><button id="logoutBtn">Déconnexion</button></div>
+  </aside>
+
+  <section id="loginView" class="login-view">
+    <div class="login-card">
+      <div class="login-logo">C</div>
+      <span class="eyebrow">CRAFTPICK STATUS</span>
+      <h1>Administration</h1>
+      <p>Gérez vos services, pages de statut, maintenances et incidents.</p>
+      <form id="loginForm">
+        <label for="password">Mot de passe</label>
+        <input id="password" type="password" autocomplete="current-password" placeholder="Votre mot de passe">
+        <button class="primary wide" type="submit">Se connecter <span>→</span></button>
+      </form>
+      <div id="loginError" class="error" hidden></div>
+    </div>
+  </section>
+
+  <main id="panel" class="content" hidden>
+    <header class="topbar">
+      <div><span class="eyebrow">CRAFTPICK STATUS</span><h1 id="pageHeading">Monitors</h1></div>
+      <div class="top-actions"><span id="connection" class="connection"><i></i> Connecté</span><button id="topLogout" class="ghost">Déconnexion</button></div>
+    </header>
+
+    <section id="monitors" class="tab-panel">
+      <div class="hero-row"><div><h2>Monitors</h2><p>Surveillez vos services en temps réel.</p></div><div><button id="checkBtn" class="secondary">↻ Vérifier tout</button><button id="newMonitorBtn" class="primary">+ Ajouter</button></div></div>
+      <div id="monitorStats" class="stats"></div>
+      <div id="monitorList" class="monitor-list"></div>
+      <section id="monitorEditor" class="drawer" hidden></section>
+    </section>
+
+    <section id="status" class="tab-panel" hidden>
+      <div class="hero-row"><div><h2>Status Pages</h2><p>Créez des pages publiques pour vos visiteurs.</p></div><button id="newStatusBtn" class="primary">+ Nouvelle page</button></div>
+      <div class="grid-2"><div id="statusList" class="stack"></div><section id="statusEditor" class="box"></section></div>
+    </section>
+
+    <section id="maintenance" class="tab-panel" hidden>
+      <div class="hero-row"><div><h2>Maintenance</h2><p>Planifiez les périodes où vos services ne doivent pas être considérés comme indisponibles.</p></div><button id="newMaintenanceBtn" class="primary">+ Planifier</button></div>
+      <div id="maintenanceList" class="stack"></div>
+      <section id="maintenanceEditor" class="box"></section>
+    </section>
+
+    <section id="incidents" class="tab-panel" hidden>
+      <div class="hero-row"><div><h2>Incidents</h2><p>Publiez et résolvez les incidents affichés sur vos pages publiques.</p></div><button id="newIncidentBtn" class="primary">+ Déclarer</button></div>
+      <div id="incidentList" class="stack"></div>
+      <section id="incidentEditor" class="box"></section>
+    </section>
+
+    <section id="settings" class="tab-panel" hidden>
+      <div class="hero-row"><div><h2>Paramètres</h2><p>Configuration générale de votre instance.</p></div></div>
+      <div class="grid-2"><section class="box"><h3>Général</h3><label>Nom du service<input id="site" placeholder="Craftpick Status"></label><label>Discord Webhook<input id="webhook" type="password" placeholder="https://discord.com/api/webhooks/..."></label><button id="saveSettingsBtn" class="primary">Sauvegarder</button></section><section class="box"><h3>Raspberry Pi</h3><div id="system" class="system-grid">Chargement…</div></section></div>
+    </section>
+  </main>
+</div>
+<script src="/admin.js"></script>
+</body>
+</html>
