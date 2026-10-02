@@ -11,7 +11,7 @@ const ADMIN_HASH=process.env.ADMIN_PASSWORD_HASH||crypto.scryptSync(process.env.
 function equal(a,b){const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&crypto.timingSafeEqual(x,y)}
 function cookie(req){const m=(req.headers.cookie||"").match(/(?:^|; )session=([^;]+)/);return m&&m[1]}
 function admin(req){const t=cookie(req),e=t&&sessions.get(t);if(!e)return false;if(e<Date.now()){sessions.delete(t);return false}return true}
-function send(res,status,data,type="application/json; charset=utf-8",extra={}){res.writeHead(status,{"Content-Type":type,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff",...extra});res.end(typeof data==="string"?data:JSON.stringify(data))}
+function send(res,status,data,type="application/json; charset=utf-8",extra={}){res.writeHead(status,{"Content-Type":type,"Cache-Control":"no-store","X-Content-Type-Options":"nosniff",...extra});res.end(Buffer.isBuffer(data)?data:(typeof data==="string"?data:JSON.stringify(data)))}
 function readBody(req){return new Promise((ok,no)=>{let b="";req.on("data",c=>{b+=c;if(b.length>2e6)req.destroy()});req.on("end",()=>{try{ok(b?JSON.parse(b):{})}catch(e){no(e)}});req.on("error",no)})}
 function id(){return crypto.randomUUID()}
 function safeUrl(v){try{return new URL(v)}catch{return null}}
