@@ -45,8 +45,8 @@ document.querySelectorAll(".nav-item").forEach(b=>b.addEventListener("click",()=
 
 function renderAll(){renderMonitors();renderStatus();renderMaintenance();renderIncidents();renderSettings();}
 function renderMonitors(){
-  const all=D.monitors.length,up=D.monitors.filter(m=>{const h=(D._history?.[m.id]||[]);return h.at(-1)?.up}).length;
-  const down=Math.max(0,all-up);
+  const all=D.monitors.length,up=D.monitors.filter(m=>D.monitorStates?.[m.id]?.online===true).length;
+  const down=D.monitors.filter(m=>D.monitorStates?.[m.id]?.online===false).length;
   $("monitorStats").innerHTML="<div class='stat'><small>Total</small><b>"+all+"</b></div><div class='stat'><small>Opérationnels</small><b class='good'>"+up+"</b></div><div class='stat'><small>Incidents</small><b class='"+(down?"bad":"good")+"'>"+down+"</b></div>";
   $("monitorList").innerHTML=all?D.monitors.map(m=>{
     const maintenance=D.maintenance.some(x=>x.enabled&&x.start<=Date.now()&&Date.now()<=x.end&&(x.monitors||[]).includes(m.id));
@@ -121,7 +121,7 @@ $("newIncidentBtn").addEventListener("click",openIncident);
 
 function renderSettings(){$("site").value=D.siteName;$("webhook").value="";}
 async function loadSystem(){
-  try{const s=await api("/api/system");const values=[["CPU",s.cpu+" cœurs"],["RAM",s.ram.percent+"% utilisée"],["Disque",s.disk?.percent??"—"+"% utilisé"],["Température",s.temp==null?"—":s.temp+" °C"],["Node",s.node],["Uptime",Math.floor(s.uptime/3600)+" h"]];$("system").innerHTML=values.map(x=>"<div class='system-item'><small>"+esc(x[0])+"</small><b>"+esc(x[1])+"</b></div>").join("");}catch{$("system").textContent="Impossible de récupérer les informations système.";}
+  try{const s=await api("/api/system");const values=[["CPU",s.cpu+" cœurs"],["RAM",s.ram.percent+"% utilisée"],["Disque",(s.disk?.percent==null?"—":s.disk.percent+"%")+" utilisé"],["Température",s.temp==null?"—":s.temp+" °C"],["Node",s.node],["Uptime",Math.floor(s.uptime/3600)+" h"]];$("system").innerHTML=values.map(x=>"<div class='system-item'><small>"+esc(x[0])+"</small><b>"+esc(x[1])+"</b></div>").join("");}catch{$("system").textContent="Impossible de récupérer les informations système.";}
 }
 $("saveSettingsBtn").addEventListener("click",async()=>{try{await api("/api/admin/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({siteName:$("site").value,discordWebhook:$("webhook").value})});D=await api("/api/admin");renderSettings();toast("Paramètres sauvegardés");}catch(e){toast(e.message,true);}});
 
