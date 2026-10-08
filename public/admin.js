@@ -1,10 +1,10 @@
 const $=id=>document.getElementById(id);
-let D=null,editingMonitor=null,editingStatus=null,tabName="monitors";
+let D=null,editingMonitor=null,editingStatus=null,tabName="monitors",booting=false;
 
 async function api(url,options={}){
-  const res=await fetch(url,{...options,cache:"no-store"});
+  const res=await fetch(url,{...options,credentials:"same-origin",cache:"no-store"});
   const data=await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(data.error||"Erreur serveur");
+  if(!res.ok) throw new Error(data.error||("HTTP "+res.status));
   return data;
 }
 function esc(value){return String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
@@ -12,11 +12,10 @@ function toast(message,bad=false){
   const el=document.createElement("div");el.className="toast"+(bad?" bad":"");el.textContent=message;document.body.appendChild(el);
   setTimeout(()=>el.remove(),2600);
 }
-function selectedMonitors(containerId){
-  return [...document.querySelectorAll("#"+containerId+" input:checked")].map(x=>x.value);
-}
+function selectedMonitors(containerId){return [...document.querySelectorAll("#"+containerId+" input:checked")].map(x=>x.value);}
 function checkboxes(id,monitors,selected=[]){
-  $(id).innerHTML=monitors.map(m=>"<label><input type='checkbox' value='"+esc(m.id)+"' "+(selected.includes(m.id)?"checked":"")+">"+esc(m.name)+"</label>").join("")||"<span class='muted'>Aucun monitor.</span>";
+  const el=$(id);if(!el)return;
+  el.innerHTML=monitors.map(m=>"<label><input type='checkbox' value='"+esc(m.id)+"' "+(selected.includes(m.id)?"checked":"")+">"+esc(m.name)+"</label>").join("")||"<span class='muted'>Aucun monitor.</span>";
 }
 function setTab(name){
   tabName=name;
@@ -25,21 +24,45 @@ function setTab(name){
   const titles={monitors:"Monitors",status:"Status Pages",maintenance:"Maintenance",incidents:"Incidents",settings:"Paramètres"};
   $("pageHeading").textContent=titles[name]||"Administration";
 }
+function showLogin(){
+  $("loginView").hidden=false;$("panel").hidden=true;
+  setTimeout(()=>$("password")?.focus(),0);
+}
+function showPanel(){ $("loginView").hidden=true;$("panel").hidden=false; }
+
 async function boot(){
+  if(booting)return;
+  booting=true;
   try{
+    const session=await api("/api/session");
+    if(!session.authenticated){showLogin();return;}
     D=await api("/api/admin");
-    $("loginView").hidden=true;$("panel").hidden=false;
-    renderAll();await loadSystem();
-  }catch{
-    $("loginView").hidden=false;$("panel").hidden=true;
-  }
+    showPanel();
+    renderAll();
+    await loadSystem();
+  }catch(err){
+    console.error("Admin boot:",err);
+    showLogin();
+  }finally{booting=false;}
 }
 $("loginForm").addEventListener("submit",async e=>{
-  e.preventDefault();$("loginError").hidden=true;
-  try{await api("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:$("password").value})});$("password").value="";await boot();}
-  catch(err){$("loginError").textContent=err.message;$("loginError").hidden=false;}
+  e.preventDefault();
+  const button=e.currentTarget.querySelector("button[type=submit]");
+  button.disabled=true;$("loginError").hidden=true;
+  try{
+    await api("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:$("password").value})});
+    $("password").value="";
+    D=await api("/api/admin");
+    showPanel();renderAll();await loadSystem();
+    toast("Connexion réussie");
+  }catch(err){
+    console.error("Login:",err);
+    $("loginError").textContent=err.message||"Connexion refusée";$("loginError").hidden=false;
+  }finally{button.disabled=false;}
 });
-async function logout(){await api("/api/logout",{method:"POST"});location.reload();}
+async function logout(){
+  try{await api("/api/logout",{method:"POST"});}finally{D=null;showLogin();}
+}
 $("logoutBtn").addEventListener("click",logout);$("topLogout").addEventListener("click",logout);
 document.querySelectorAll(".nav-item").forEach(b=>b.addEventListener("click",()=>setTab(b.dataset.tab)));
 
@@ -56,20 +79,14 @@ function renderMonitors(){
   document.querySelectorAll("[data-delete]").forEach(b=>b.addEventListener("click",()=>deleteMonitor(b.dataset.delete)));
 }
 function openMonitor(id=null){
-  editingMonitor=D.monitors.find(m=>m.id===id)||null;
-  const m=editingMonitor||{};
+  editingMonitor=D.monitors.find(m=>m.id===id)||null;const m=editingMonitor||{};
   $("monitorEditor").hidden=false;
   $("monitorEditor").innerHTML="<div class='hero-row'><div><h3>"+(editingMonitor?"Modifier le monitor":"Nouveau monitor")+"</h3><p>Configurez les paramètres de surveillance.</p></div><button class='ghost' id='closeMonitor'>Fermer</button></div><div class='form-grid'><label class='field'>Nom<input id='mname' value='"+esc(m.name||"")+"' placeholder='Site Craftpick'></label><label class='field'>Type<select id='mtype'><option value='http'>HTTP / HTTPS</option><option value='keyword'>HTTP + Keyword</option><option value='tcp'>TCP</option><option value='ping'>Ping</option></select></label><label class='field full'>URL<input id='murl' value='"+esc(m.url||"")+"' placeholder='https://craftpick.fr'></label><label class='field'>Intervalle (secondes)<input id='minterval' type='number' min='10' value='"+(m.interval||60)+"'></label><label class='field'>Timeout (ms)<input id='mtimeout' type='number' min='1000' value='"+(m.timeout||5000)+"'></label><label class='field full'>Mot-clé attendu <input id='mkeyword' value='"+esc(m.keyword||"")+"' placeholder='Uniquement pour HTTP + Keyword'></label><label class='field full'>Tags<input id='mtags' value='"+esc((m.tags||[]).join(", "))+"' placeholder='Web, Minecraft, API'></label></div><div class='form-actions'><button class='primary' id='saveMonitor'>Enregistrer</button><button class='secondary' id='cancelMonitor'>Annuler</button></div>";
-  $("mtype").value=m.type||"http";
-  $("closeMonitor").onclick=closeMonitor;$("cancelMonitor").onclick=closeMonitor;$("saveMonitor").onclick=saveMonitor;
-  $("mname").focus();
+  $("mtype").value=m.type||"http";$("closeMonitor").onclick=closeMonitor;$("cancelMonitor").onclick=closeMonitor;$("saveMonitor").onclick=saveMonitor;$("mname").focus();
 }
 function closeMonitor(){editingMonitor=null;$("monitorEditor").hidden=true;}
 async function saveMonitor(){
-  try{
-    await api("/api/admin/monitor",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:editingMonitor?.id,name:$("mname").value,url:$("murl").value,type:$("mtype").value,keyword:$("mkeyword").value,interval:+$("minterval").value,timeout:+$("mtimeout").value,tags:$("mtags").value.split(",").map(x=>x.trim()).filter(Boolean)})});
-    D=await api("/api/admin");renderAll();closeMonitor();toast("Monitor enregistré");
-  }catch(e){toast(e.message,true);}
+  try{await api("/api/admin/monitor",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:editingMonitor?.id,name:$("mname").value,url:$("murl").value,type:$("mtype").value,keyword:$("mkeyword").value,interval:+$("minterval").value,timeout:+$("mtimeout").value,tags:$("mtags").value.split(",").map(x=>x.trim()).filter(Boolean)})});D=await api("/api/admin");renderAll();closeMonitor();toast("Monitor enregistré");}catch(e){toast(e.message,true);}
 }
 async function deleteMonitor(id){if(!confirm("Supprimer ce monitor et son historique ?"))return;try{await api("/api/admin/monitor/"+encodeURIComponent(id),{method:"DELETE"});D=await api("/api/admin");renderAll();toast("Monitor supprimé");}catch(e){toast(e.message,true);}}
 $("newMonitorBtn").addEventListener("click",()=>openMonitor());
@@ -81,19 +98,16 @@ function renderStatus(){
   if(!editingStatus&&D.statusPages[0])openStatus(D.statusPages[0].id);
 }
 function openStatus(id=null){
-  editingStatus=D.statusPages.find(p=>p.id===id)||null;
-  const p=editingStatus||{title:D.siteName,slug:"status",description:"État en temps réel de nos services.",monitors:[]};
+  editingStatus=D.statusPages.find(p=>p.id===id)||null;const p=editingStatus||{title:D.siteName,slug:"status",description:"État en temps réel de nos services.",monitors:[]};
   $("statusEditor").innerHTML="<h3>"+(editingStatus?"Modifier la page":"Nouvelle status page")+"</h3><label>Titre<input id='spTitle' value='"+esc(p.title)+"'></label><label>Slug<input id='spSlug' value='"+esc(p.slug)+"'></label><label>Description<input id='spDesc' value='"+esc(p.description)+"'></label><label>Monitors</label><div id='spMonitors' class='check-list'></div><button class='primary' id='saveStatus'>Enregistrer</button>";
   checkboxes("spMonitors",D.monitors,p.monitors||[]);$("saveStatus").onclick=saveStatus;
 }
-async function saveStatus(){
-  try{await api("/api/admin/status-page",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:editingStatus?.id,title:$("spTitle").value,slug:$("spSlug").value,description:$("spDesc").value,monitors:selectedMonitors("spMonitors")})});D=await api("/api/admin");editingStatus=null;renderStatus();toast("Status page enregistrée");}catch(e){toast(e.message,true);}
-}
+async function saveStatus(){try{await api("/api/admin/status-page",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:editingStatus?.id,title:$("spTitle").value,slug:$("spSlug").value,description:$("spDesc").value,monitors:selectedMonitors("spMonitors")})});D=await api("/api/admin");editingStatus=null;renderStatus();toast("Status page enregistrée");}catch(e){toast(e.message,true);}}
 $("newStatusBtn").addEventListener("click",()=>openStatus());
 
 function renderMaintenance(){
   $("maintenanceList").innerHTML=D.maintenance.length?D.maintenance.map(x=>"<div class='list-card'><div><b>"+esc(x.title)+"</b><small>"+new Date(x.start).toLocaleString("fr-FR")+" → "+new Date(x.end).toLocaleString("fr-FR")+"</small></div><button class='icon-btn danger' data-maint='"+esc(x.id)+"'>Supprimer</button></div>").join(""):"<div class='empty'>Aucune maintenance planifiée.</div>";
-  document.querySelectorAll("[data-maint]").forEach(b=>b.onclick=async()=>{await api("/api/admin/maintenance/"+encodeURIComponent(b.dataset.maint),{method:"DELETE"});D=await api("/api/admin");renderAll();toast("Maintenance supprimée");});
+  document.querySelectorAll("[data-maint]").forEach(b=>b.onclick=async()=>{try{await api("/api/admin/maintenance/"+encodeURIComponent(b.dataset.maint),{method:"DELETE"});D=await api("/api/admin");renderAll();toast("Maintenance supprimée");}catch(e){toast(e.message,true);}});
 }
 function openMaintenance(){
   const start=new Date(Date.now()+300000),end=new Date(Date.now()+3900000);
@@ -101,28 +115,21 @@ function openMaintenance(){
   checkboxes("maintMonitors",D.monitors,[]);$("saveMaintenance").onclick=saveMaintenance;
 }
 function localDate(d){const x=new Date(d.getTime()-d.getTimezoneOffset()*60000);return x.toISOString().slice(0,16);}
-async function saveMaintenance(){
-  try{await api("/api/admin/maintenance",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:$("mtitle").value,start:new Date($("mstart").value).getTime(),end:new Date($("mend").value).getTime(),monitors:selectedMonitors("maintMonitors"),enabled:true})});D=await api("/api/admin");renderAll();toast("Maintenance planifiée");}catch(e){toast(e.message,true);}
-}
+async function saveMaintenance(){try{await api("/api/admin/maintenance",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:$("mtitle").value,start:new Date($("mstart").value).getTime(),end:new Date($("mend").value).getTime(),monitors:selectedMonitors("maintMonitors"),enabled:true})});D=await api("/api/admin");renderAll();toast("Maintenance planifiée");}catch(e){toast(e.message,true);}}
 $("newMaintenanceBtn").addEventListener("click",openMaintenance);
 
 function renderIncidents(){
   $("incidentList").innerHTML=D.incidents.length?D.incidents.slice().reverse().map(x=>"<div class='list-card incident-card "+esc(x.severity)+" "+(x.resolved?"resolved":"")+"'><div><b>"+esc(x.title)+"</b><small>"+esc(x.severity.toUpperCase())+" · "+(x.resolved?"Résolu":"Actif")+" · "+new Date(x.created||Date.now()).toLocaleString("fr-FR")+"</small></div>"+(x.resolved?"":"<button class='icon-btn' data-resolve='"+esc(x.id)+"'>Résoudre</button>")+"</div>").join(""):"<div class='empty'>Aucun incident.</div>";
-  document.querySelectorAll("[data-resolve]").forEach(b=>b.onclick=async()=>{await api("/api/admin/incident/resolve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.resolve})});D=await api("/api/admin");renderAll();toast("Incident résolu");});
+  document.querySelectorAll("[data-resolve]").forEach(b=>b.onclick=async()=>{try{await api("/api/admin/incident/resolve",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.resolve})});D=await api("/api/admin");renderAll();toast("Incident résolu");}catch(e){toast(e.message,true);}});
 }
 function openIncident(){
   $("incidentEditor").innerHTML="<h3>Déclarer un incident</h3><label>Titre<input id='ititle' placeholder='Dégradation du réseau'></label><label>Sévérité<select id='iseverity'><option value='minor'>Mineur</option><option value='major'>Majeur</option><option value='critical'>Critique</option></select></label><label>Message<textarea id='imessage' placeholder='Décrivez le problème...'></textarea></label><label>Monitors concernés</label><div id='incMonitors' class='check-list'></div><button class='primary' id='saveIncident'>Publier</button>";
   checkboxes("incMonitors",D.monitors,[]);$("saveIncident").onclick=saveIncident;
 }
-async function saveIncident(){
-  try{await api("/api/admin/incident",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:$("ititle").value,message:$("imessage").value,severity:$("iseverity").value,monitors:selectedMonitors("incMonitors")})});D=await api("/api/admin");renderAll();toast("Incident publié");}catch(e){toast(e.message,true);}
-}
+async function saveIncident(){try{await api("/api/admin/incident",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:$("ititle").value,message:$("imessage").value,severity:$("iseverity").value,monitors:selectedMonitors("incMonitors")})});D=await api("/api/admin");renderAll();toast("Incident publié");}catch(e){toast(e.message,true);}}
 $("newIncidentBtn").addEventListener("click",openIncident);
 
 function renderSettings(){$("site").value=D.siteName;$("webhook").value="";}
-async function loadSystem(){
-  try{const s=await api("/api/system");const values=[["CPU",s.cpu+" cœurs"],["RAM",s.ram.percent+"% utilisée"],["Disque",(s.disk?.percent==null?"—":s.disk.percent+"%")+" utilisé"],["Température",s.temp==null?"—":s.temp+" °C"],["Node",s.node],["Uptime",Math.floor(s.uptime/3600)+" h"]];$("system").innerHTML=values.map(x=>"<div class='system-item'><small>"+esc(x[0])+"</small><b>"+esc(x[1])+"</b></div>").join("");}catch{$("system").textContent="Impossible de récupérer les informations système.";}
-}
+async function loadSystem(){try{const s=await api("/api/system");const values=[["CPU",s.cpu+" cœurs"],["RAM",s.ram.percent+"% utilisée"],["Disque",(s.disk?.percent==null?"—":s.disk.percent+"%")+" utilisé"],["Température",s.temp==null?"—":s.temp+" °C"],["Node",s.node],["Uptime",Math.floor(s.uptime/3600)+" h"]];$("system").innerHTML=values.map(x=>"<div class='system-item'><small>"+esc(x[0])+"</small><b>"+esc(x[1])+"</b></div>").join("");}catch{$("system").textContent="Impossible de récupérer les informations système.";}}
 $("saveSettingsBtn").addEventListener("click",async()=>{try{await api("/api/admin/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({siteName:$("site").value,discordWebhook:$("webhook").value})});D=await api("/api/admin");renderSettings();toast("Paramètres sauvegardés");}catch(e){toast(e.message,true);}});
-
 setTab("monitors");boot();
