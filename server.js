@@ -7,7 +7,14 @@ function load(f,d){try{return JSON.parse(fs.readFileSync(f,"utf8"))}catch{return
 let cfg=load(cfgFile,defaults),history=load(histFile,{});
 cfg.monitors??=[];cfg.statusPages??=defaults.statusPages;cfg.maintenance??=[];cfg.incidents??=[];cfg.notifications??={discordWebhook:""};
 const sessions=new Map(),loginFails=new Map(),notified=new Map(),timers=new Map();
-const ADMIN_HASH=process.env.ADMIN_PASSWORD_HASH||crypto.scryptSync(process.env.ADMIN_PASSWORD||"","craftpick-status",64).toString("hex");
+const ADMIN_PASSWORD=process.env.ADMIN_PASSWORD||"";
+const ADMIN_HASH=process.env.ADMIN_PASSWORD_HASH||(
+  ADMIN_PASSWORD ? crypto.scryptSync(ADMIN_PASSWORD,"craftpick-status",64).toString("hex") : ""
+);
+if(!ADMIN_HASH){
+  console.error("ERREUR: ADMIN_PASSWORD ou ADMIN_PASSWORD_HASH doit être défini.");
+  process.exit(1);
+}
 function equal(a,b){const x=Buffer.from(a),y=Buffer.from(b);return x.length===y.length&&crypto.timingSafeEqual(x,y)}
 function cookie(req){const m=(req.headers.cookie||"").match(/(?:^|; )session=([^;]+)/);return m&&m[1]}
 function admin(req){const t=cookie(req),e=t&&sessions.get(t);if(!e)return false;if(e<Date.now()){sessions.delete(t);return false}return true}
@@ -27,8 +34,11 @@ const MIME={".html":"text/html; charset=utf-8",".css":"text/css; charset=utf-8",
 function publicPage(slug){const p=cfg.statusPages.find(x=>x.slug===slug)||cfg.statusPages[0];const ids=p?.monitors?.length?p.monitors:cfg.monitors.map(x=>x.id);return{siteName:p?.title||cfg.siteName,description:p?.description||"",monitors:cfg.monitors.filter(m=>ids.includes(m.id)).map(monitorPublic),incidents:cfg.incidents.filter(x=>!x.resolved).slice(-20),maintenance:cfg.maintenance.filter(x=>x.enabled&&x.end>Date.now()).map(x=>({id:x.id,title:x.title,start:x.start,end:x.end,monitors:x.monitors}))}}
 function adminData(){return{siteName:cfg.siteName,monitors:cfg.monitors,monitorStates:Object.fromEntries(cfg.monitors.map(m=>{const x=(history[m.id]||[]).at(-1);return[m.id,{online:x?.up??null,latency:x?.latency??null,lastCheck:x?.time??null}]})),statusPages:cfg.statusPages,maintenance:cfg.maintenance,incidents:cfg.incidents,notifications:{discordWebhook:cfg.notifications.discordWebhook?"configured":""}}}
 const server=http.createServer(async(req,res)=>{const u=new URL(req.url,"http://localhost");
-if(req.method==="POST"&&u.pathname==="/api/login"){const ip=req.socket.remoteAddress||"unknown",f=loginFails.get(ip)||{n:0,until:0};if(f.until>Date.now())return send(res,429,{error:"Trop de tentatives"});try{const b=await readBody(req);if(!equal(crypto.scryptSync(String(b.password||""),"craftpick-status",64).toString("hex"),ADMIN_HASH)){f.n++;if(f.n>=5){f.n=0;f.until=Date.now()+60000}loginFails.set(ip,f);return send(res,401,{error:"Mot de passe incorrect"})}loginFails.delete(ip);const t=crypto.randomBytes(32).toString("hex");sessions.set(t,Date.now()+86400000);return send(res,200,{ok:true},"application/json; charset=utf-8",{"Set-Cookie":`session=${t}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`})}catch{return send(res,400,{error:"Requête invalide"})}}
-if(req.method==="POST"&&u.pathname==="/api/logout"){const t=cookie(req);if(t)sessions.delete(t);return send(res,200,{ok:true},"application/json; charset=utf-8",{"Set-Cookie":"session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"})}
+if(req.method==="GET"&&u.pathname==="/api/session"){
+  return send(res,200,{authenticated:admin(req)});
+}
+if(req.method==="POST"&&u.pathname==="/api/login"){const ip=req.socket.remoteAddress||"unknown",f=loginFails.get(ip)||{n:0,until:0};if(f.until>Date.now())return send(res,429,{error:"Trop de tentatives"});try{const b=await readBody(req);if(!equal(crypto.scryptSync(String(b.password||""),"craftpick-status",64).toString("hex"),ADMIN_HASH)){f.n++;if(f.n>=5){f.n=0;f.until=Date.now()+60000}loginFails.set(ip,f);return send(res,401,{error:"Mot de passe incorrect"})}loginFails.delete(ip);const t=crypto.randomBytes(32).toString("hex");sessions.set(t,Date.now()+86400000);return send(res,200,{ok:true},"application/json; charset=utf-8",{"Set-Cookie":`session=${t}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400`,"X-Auth-Status":"authenticated"})}catch{return send(res,400,{error:"Requête invalide"})}}
+if(req.method==="POST"&&u.pathname==="/api/logout"){const t=cookie(req);if(t)sessions.delete(t);return send(res,200,{ok:true},"application/json; charset=utf-8",{"Set-Cookie":"session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"})}
 if(u.pathname==="/api/health")return send(res,200,{ok:true});
 if(u.pathname==="/api/public")return send(res,200,publicPage(u.searchParams.get("page")||"craftpick"));
 if(u.pathname==="/api/system"){if(!admin(req))return send(res,401,{error:"Unauthorized"});return send(res,200,await system())}
